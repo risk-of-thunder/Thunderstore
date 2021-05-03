@@ -1,34 +1,42 @@
 from datetime import datetime
 from typing import List, Optional, TypedDict
 
+import ulid2
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from mypy_boto3_s3 import Client
 from mypy_boto3_s3.type_defs import CompletedPartTypeDef
 
 from thunderstore.core.types import UserType
-from thunderstore.usermedia.exceptions import S3BucketNameMissingException
+from thunderstore.usermedia.exceptions import (
+    S3BucketNameMissingException,
+    S3FileKeyChangedException,
+)
 from thunderstore.usermedia.models import UserMedia
 from thunderstore.usermedia.models.usermedia import UserMediaStatus
 
 
 def create_upload(
-    client: Client, user: UserType, expiry: Optional[datetime] = None
+    client: Client, user: UserType, filename: str, expiry: Optional[datetime] = None
 ) -> UserMedia:
     bucket_name = settings.AWS_STORAGE_BUCKET_NAME
     if not bucket_name:
         raise S3BucketNameMissingException()
 
-    user_media = UserMedia.objects.create(
+    user_media = UserMedia(
+        uuid=ulid2.generate_ulid_as_uuid(),
+        filename=filename,
         status=UserMediaStatus.initial,
         owner=user,
         prefix=settings.AWS_LOCATION,
         expiry=expiry,
     )
+    user_media.key = user_media.compute_key()
+    user_media.save()
 
     response = client.create_multipart_upload(
         Bucket=bucket_name,
-        Key=user_media.file_key,
+        Key=user_media.key,
         Metadata=user_media.s3_metadata,
     )
     user_media.upload_id = response["UploadId"]
@@ -61,7 +69,7 @@ def get_signed_upload_urls(
                     ClientMethod="upload_part",
                     Params={
                         "Bucket": bucket_name,
-                        "Key": user_media.file_key,
+                        "Key": user_media.key,
                         "UploadId": user_media.upload_id,
                         "PartNumber": part_number,
                     },
@@ -88,16 +96,27 @@ def finalize_upload(
 
     parts = sorted(parts, key=lambda x: x["PartNumber"])
 
-    client.complete_multipart_upload(
+    result = client.complete_multipart_upload(
         Bucket=bucket_name,
-        Key=user_media.file_key,
+        Key=user_media.key,
         MultipartUpload={
             "Parts": parts,
         },
         UploadId=user_media.upload_id,
     )
-    user_media.status = UserMediaStatus.upload_complete
-    user_media.save(update_fields=("status",))
+
+    if result["Key"] != user_media.key:
+        user_media.status = UserMediaStatus.upload_error
+        user_media.save(update_fields=("status",))
+        raise S3FileKeyChangedException(user_media.key, result["Key"])
+    else:
+        meta = client.head_object(
+            Bucket=bucket_name,
+            Key=user_media.key,
+        )
+        user_media.size = meta["ContentLength"]
+        user_media.status = UserMediaStatus.upload_complete
+        user_media.save(update_fields=("status", "size"))
 
 
 # TODO: Implement

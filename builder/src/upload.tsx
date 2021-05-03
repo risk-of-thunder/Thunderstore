@@ -1,5 +1,5 @@
 import React, { CSSProperties, useEffect, useRef, useState } from "react";
-import { CompletedPart, ExperimentalApi, UserMedia } from "./api";
+import { CompletedPart, ExperimentalApi } from "./api";
 import * as crypto from "crypto-js";
 
 interface UploadFileInputProps {
@@ -110,7 +110,6 @@ const calculateMD5 = (blob: Blob) => {
 
 export const UploadForm: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
-    const [userMedia, setUserMedia] = useState<UserMedia | null>(null);
     const [progress, setProgress] = useState<number | null>(null);
     const [uploadComplete, setUploadComplete] = useState<boolean>(false);
     const [uploadError, setUploadError] = useState<boolean>(false);
@@ -124,10 +123,11 @@ export const UploadForm: React.FC = () => {
         setUploadComplete(false);
         setUploadError(false);
         setProgress(null);
-        const handle = await ExperimentalApi.initiateUpload();
-        setUserMedia(handle);
-        console.log(handle);
-        console.log(userMedia);
+        const handle = await ExperimentalApi.initiateUpload({
+            data: {
+                filename: file.name,
+            },
+        });
         const urls = await ExperimentalApi.createPartUploadUrls({
             usermediaId: handle.uuid,
             data: { file_size_bytes: file.size },
@@ -172,20 +172,18 @@ export const UploadForm: React.FC = () => {
             uploadPromises.push(promise);
         }
         await Promise.all(uploadPromises);
-        const finish = await ExperimentalApi.finishUpload({
+        await ExperimentalApi.finishUpload({
             usermediaId: handle.uuid,
             data: {
                 parts: completedParts,
             },
         });
         setUploadComplete(true);
-        setUserMedia(finish);
     };
 
     const cancel = async () => {
         setFile(null);
         // TODO: Add API call to abort upload
-        setUserMedia(null);
         setUploadComplete(false);
         setUploadError(false);
         setProgress(null);

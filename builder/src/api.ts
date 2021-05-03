@@ -97,8 +97,8 @@ class ExperimentalApiImpl extends ThunderstoreApi {
         return await response.json();
     };
 
-    initiateUpload = async () => {
-        const response = await this.post(ApiUrls.initiateUpload());
+    initiateUpload = async (props: { data: { filename: string } }) => {
+        const response = await this.post(ApiUrls.initiateUpload(), props.data);
         return (await response.json()) as UserMedia;
     };
 

@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from django.utils import timezone
-from drf_yasg.utils import no_body, swagger_auto_schema
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
@@ -9,11 +9,10 @@ from rest_framework.response import Response
 
 from thunderstore.usermedia.api.experimental.serializers import (
     UserMediaCreatePartUploadUrlsParams,
+    UserMediaFinishUploadParamsSerializer,
+    UserMediaInitiateUploadParams,
     UserMediaSerializer,
     UserMediaUploadUrlsSerializer,
-)
-from thunderstore.usermedia.api.experimental.serializers.upload import (
-    UserMediaFinishUploadParamsSerializer,
 )
 from thunderstore.usermedia.models import UserMedia
 from thunderstore.usermedia.s3_client import get_s3_client
@@ -33,14 +32,20 @@ class UserMediaInitiateUploadApiView(GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        request_body=no_body,
+        request_body=UserMediaInitiateUploadParams,
         responses={201: UserMediaSerializer()},
         operation_id="experimental.usermedia.initiate-upload",
     )
     def post(self, request, *args, **kwargs):
+        validator = UserMediaInitiateUploadParams(data=request.data)
+        validator.is_valid(raise_exception=True)
+
         client = get_s3_client()
         user_media = create_upload(
-            client=client, user=request.user, expiry=timezone.now() + timedelta(days=1)
+            client=client,
+            user=request.user,
+            filename=validator.validated_data["filename"],
+            expiry=timezone.now() + timedelta(days=1),
         )
         serializer = self.get_serializer(user_media)
         return Response(
@@ -68,7 +73,7 @@ class UserMediaCreatePartUploadUrlsApiView(GenericAPIView):
         validator = self.get_serializer(data=request.data)
         validator.is_valid(raise_exception=True)
 
-        part_count = -(-validator.data["file_size_bytes"] // PART_SIZE)
+        part_count = -(-validator.validated_data["file_size_bytes"] // PART_SIZE)
 
         upload_urls = get_signed_upload_urls(
             user=request.user,
@@ -109,7 +114,7 @@ class UserMediaFinishUploadApiView(GenericAPIView):
             user=request.user,
             client=client,
             user_media=instance,
-            parts=validator.data["parts"],
+            parts=validator.validated_data["parts"],
         )
         serializer = UserMediaSerializer(instance)
         return Response(
